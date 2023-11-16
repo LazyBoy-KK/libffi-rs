@@ -331,6 +331,115 @@ impl<'a> Closure<'a> {
     }
 }
 
+/// Closure that takes ownership of userdata
+#[derive(Debug)]
+pub struct ClosureOwner<U> {
+    _cif: Box<Cif>,
+    alloc: *mut low::ffi_closure,
+    code: CodePtr,
+    _userdata: U,
+}
+
+impl<U> Drop for ClosureOwner<U> {
+    fn drop(&mut self) {
+        unsafe {
+            low::closure_free(self.alloc);
+        }
+    }
+}
+
+impl<U> ClosureOwner<U> {
+    /// Creates a new closure with immutable userdata.
+    ///
+    /// # Arguments
+    ///
+    /// - `cif` — describes the calling convention and argument and
+    ///   result types
+    /// - `callback` — the function to call when the closure is invoked
+    /// - `userdata` — the pointer to pass to `callback` along with the
+    ///   arguments when the closure is called
+    ///
+    /// # Result
+    ///
+    /// The new closure.
+    pub fn new<R>(cif: Cif, callback: Callback<U, R>, userdata: U) -> Self {
+        let cif = Box::new(cif);
+        let (alloc, code) = low::closure_alloc();
+
+        unsafe {
+            low::prep_closure(
+                alloc,
+                cif.as_raw_ptr(),
+                callback,
+                &userdata as *const U,
+                code,
+            )
+            .unwrap();
+        }
+
+        ClosureOwner {
+            _cif: cif,
+            alloc,
+            code,
+            _userdata: userdata
+        }
+    }
+
+    /// Creates a new closure with mutable userdata.
+    ///
+    /// # Arguments
+    ///
+    /// - `cif` — describes the calling convention and argument and
+    ///   result types
+    /// - `callback` — the function to call when the closure is invoked
+    /// - `userdata` — the pointer to pass to `callback` along with the
+    ///   arguments when the closure is called
+    ///
+    /// # Result
+    ///
+    /// The new closure.
+    pub fn new_mut<R>(cif: Cif, callback: CallbackMut<U, R>, mut userdata: U) -> Self {
+        let cif = Box::new(cif);
+        let (alloc, code) = low::closure_alloc();
+
+        unsafe {
+            low::prep_closure_mut(alloc, cif.as_raw_ptr(), callback, &mut userdata as *mut U, code)
+                .unwrap();
+        }
+
+        ClosureOwner {
+            _cif: cif,
+            alloc,
+            code,
+            _userdata: userdata
+        }
+    }
+
+    /// Obtains the callable code pointer for a closure.
+    ///
+    /// # Safety
+    ///
+    /// The result needs to be transmuted to the correct type before
+    /// it can be called. If the type is wrong then undefined behavior
+    /// will result.
+    pub fn code_ptr(&self) -> &unsafe extern "C" fn() {
+        self.code.as_fun()
+    }
+
+    /// Transmutes the callable code pointer for a closure to a reference
+    /// to any type. This is intended to be used to transmute it to its
+    /// correct function type in order to call it.
+    ///
+    /// # Safety
+    ///
+    /// This method allows transmuting to a reference to *any* sized type,
+    /// and cannot check whether the code pointer actually has that type.
+    /// If the type is wrong then undefined behavior will result.
+    pub unsafe fn instantiate_code_ptr<T>(&self) -> &T {
+        self.code.as_any_ref_()
+    }
+}
+
 /// The type of callback invoked by a [`ClosureOnce`].
 pub type CallbackOnce<U, R> = CallbackMut<Option<U>, R>;
 
